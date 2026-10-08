@@ -1,0 +1,38 @@
+{
+  "model_architecture": "DSCNNMicro",
+  "num_classes": 12,
+  "classes": [
+    "yes",
+    "no",
+    "stop",
+    "go",
+    "left",
+    "right",
+    "on",
+    "off",
+    "up",
+    "down",
+    "_silence_",
+    "_unknown_"
+  ],
+  "input_tensor_shape": [
+    1,
+    39,
+    16
+  ],
+  "final_accuracy_pct": 88.57,
+  "hardware_audit": {
+    "target_core": "ARM Cortex-M0+ (RP2040, 125 MHz)",
+    "peak_sram_kb": 6.25,
+    "sram_budget_kb": 16.0,
+    "sram_passed": true,
+    "total_flash_kb": 4.1,
+    "flash_budget_kb": 48.0,
+    "flash_passed": true,
+    "inference_latency_ms": 6.44,
+    "latency_budget_ms": 20.0,
+    "latency_passed": true,
+    "total_macs": 179008,
+    "total_cpu_cycles": 805536
+  }
+}

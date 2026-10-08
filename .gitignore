@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Dataset Files & Binary Audio Archives (> 100 MB)
+# Datasets are deterministically generated via `python dataset/download_curate.py`
+data/
+*.tar.gz
+*.wav
+*.pdm
+
+# Scratch & Temporary Notes
+scratch/
+subweb.txt
+*.tmp
+*.log
+
+# OS & Editor Artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

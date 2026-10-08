@@ -1,0 +1,80 @@
+{
+  "pattern_mask_hex": "0xFFFFFFFF",
+  "pattern_mask_uint32": 4294967295,
+  "pattern_bits": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0
+  ],
+  "threshold_theta": 22,
+  "pdm_sample_rate_hz": 1024000,
+  "window_duration_us": 31.25,
+  "expected_fa_per_hour": 0.0,
+  "roc_evaluation": [
+    {
+      "snr_db": -10,
+      "threshold": 22,
+      "detection_probability": 1.0,
+      "expected_fa_per_hour": "0.0000e+00"
+    },
+    {
+      "snr_db": -5,
+      "threshold": 22,
+      "detection_probability": 1.0,
+      "expected_fa_per_hour": "0.0000e+00"
+    },
+    {
+      "snr_db": 0,
+      "threshold": 22,
+      "detection_probability": 1.0,
+      "expected_fa_per_hour": "0.0000e+00"
+    },
+    {
+      "snr_db": 5,
+      "threshold": 22,
+      "detection_probability": 1.0,
+      "expected_fa_per_hour": "0.0000e+00"
+    },
+    {
+      "snr_db": 10,
+      "threshold": 22,
+      "detection_probability": 1.0,
+      "expected_fa_per_hour": "0.0000e+00"
+    },
+    {
+      "snr_db": 20,
+      "threshold": 22,
+      "detection_probability": 1.0,
+      "expected_fa_per_hour": "0.0000e+00"
+    }
+  ]
+}

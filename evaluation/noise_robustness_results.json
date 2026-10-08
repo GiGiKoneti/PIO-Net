@@ -1,0 +1,143 @@
+{
+  "snr_levels_db": [
+    -5,
+    0,
+    5,
+    10,
+    15,
+    20
+  ],
+  "profiles": {
+    "office_babble": {
+      "pionet_stage1_recall": [
+        92.5,
+        85.0,
+        85.0,
+        77.5,
+        75.0,
+        75.0
+      ],
+      "pionet_end_to_end_recall": [
+        92.5,
+        85.0,
+        85.0,
+        77.5,
+        75.0,
+        75.0
+      ],
+      "config_a_webrtc_recall": [
+        95.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ],
+      "config_b_energy_recall": [
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ]
+    },
+    "factory_machinery": {
+      "pionet_stage1_recall": [
+        92.5,
+        87.5,
+        85.0,
+        77.5,
+        77.5,
+        75.0
+      ],
+      "pionet_end_to_end_recall": [
+        92.5,
+        87.5,
+        85.0,
+        77.5,
+        77.5,
+        75.0
+      ],
+      "config_a_webrtc_recall": [
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ],
+      "config_b_energy_recall": [
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ]
+    },
+    "stationary_ambient": {
+      "pionet_stage1_recall": [
+        97.5,
+        90.0,
+        85.0,
+        82.5,
+        75.0,
+        75.0
+      ],
+      "pionet_end_to_end_recall": [
+        97.5,
+        90.0,
+        85.0,
+        82.5,
+        75.0,
+        75.0
+      ],
+      "config_a_webrtc_recall": [
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ],
+      "config_b_energy_recall": [
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ]
+    }
+  },
+  "quiescent_fwr": {
+    "office_babble": {
+      "test_duration_sec": 10.0,
+      "stage1_wakes": 20,
+      "stage1_wakes_per_hour": 7200.0,
+      "e2e_false_keywords": 0,
+      "e2e_fwr_per_hour": 0.0,
+      "cascaded_power_mw": 17.95,
+      "energy_savings_pct": 72.4
+    },
+    "factory_machinery": {
+      "test_duration_sec": 10.0,
+      "stage1_wakes": 20,
+      "stage1_wakes_per_hour": 7200.0,
+      "e2e_false_keywords": 0,
+      "e2e_fwr_per_hour": 0.0,
+      "cascaded_power_mw": 17.95,
+      "energy_savings_pct": 72.4
+    },
+    "stationary_ambient": {
+      "test_duration_sec": 10.0,
+      "stage1_wakes": 20,
+      "stage1_wakes_per_hour": 7200.0,
+      "e2e_false_keywords": 0,
+      "e2e_fwr_per_hour": 0.0,
+      "cascaded_power_mw": 17.95,
+      "energy_savings_pct": 72.4
+    }
+  }
+}
