@@ -1,0 +1,29 @@
+.program pdm_reader
+.side_set 1
+.wrap_target
+    in pins, 1          side 1
+    nop side 0
+.wrap
+
+% c-sdk {
+static inline void pdm_reader_program_init(PIO pio, uint sm, uint offset,
+                                           uint pin_data, uint pin_clk) {
+    pio_sm_config c = pdm_reader_program_get_default_config(offset);
+
+    sm_config_set_in_pins(&c, pin_data);
+    sm_config_set_sideset_pins(&c, pin_clk);
+
+    sm_config_set_in_shift(&c, false, true, 32);
+
+    // 125 MHz / (2*1.024) = 61.035
+    sm_config_set_clkdiv(&c, 61.035f);
+
+    pio_gpio_init(pio, pin_data);
+    pio_gpio_init(pio, pin_clk);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_clk,  1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_data, 1, false);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
