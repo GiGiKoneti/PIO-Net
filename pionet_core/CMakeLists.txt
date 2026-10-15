@@ -1,24 +1,21 @@
 cmake_minimum_required(VERSION 3.13)
 
-include(D:/pico/sdk/external/pico_sdk_import.cmake)
+if(DEFINED ENV{PICO_SDK_PATH})
+    include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
+elseif(EXISTS "D:/pico/sdk/external/pico_sdk_import.cmake")
+    include(D:/pico/sdk/external/pico_sdk_import.cmake)
+else()
+    message(FATAL_ERROR "PICO_SDK_PATH not set and fallback path D:/pico/sdk not found")
+endif()
 
 project(pionet_core C CXX ASM)
-
 pico_sdk_init()
 
 add_executable(pionet_core)
-
 pico_generate_pio_header(pionet_core ${CMAKE_CURRENT_LIST_DIR}/pdm_reader.pio)
-
 target_sources(pionet_core PRIVATE main.c)
-
 target_include_directories(pionet_core PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-
-target_link_libraries(pionet_core PRIVATE
-        pico_stdlib
-        hardware_pio
-)
-
+target_link_libraries(pionet_core PRIVATE pico_stdlib hardware_pio)
 pico_add_extra_outputs(pionet_core)
 pico_enable_stdio_usb(pionet_core 1)
 pico_enable_stdio_uart(pionet_core 0)
