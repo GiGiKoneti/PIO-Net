@@ -33,3 +33,8 @@ subweb.txt
 Thumbs.db
 .vscode/
 .idea/
+
+# RP2040 & CMake Build Artifacts
+build/
+cmake-build-*/
+*.pio.h
