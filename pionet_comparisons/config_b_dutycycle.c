@@ -33,6 +33,14 @@
 #include "stage2_infer.h"
 #include "stage2_features.h"
 
+// Configurable wake interval (compile with -DDUTYCYCLE_WAKE_MS=50 or =100 for sweep)
+#ifndef DUTYCYCLE_WAKE_MS
+#define DUTYCYCLE_WAKE_MS   10
+#endif
+#define WAKE_SAMPLES        (DUTYCYCLE_WAKE_MS * 16)    // samples per wake block at 16 kHz
+#define WAKE_PDM_WORDS      (WAKE_SAMPLES * 2)          // PDM words (2 words per sample)
+#define WAKE_US             (DUTYCYCLE_WAKE_MS * 1000u)  // wake interval in microseconds
+
 #define RING_BYTES          32768
 #define RING_WORDS          (RING_BYTES / sizeof(uint32_t)) // 8192 words
 #define RING_MASK           (RING_WORDS - 1)
@@ -91,6 +99,12 @@ int main(void) {
     // -------------------------------------------------------------------------
     // Peripheral Clock Gating & Deep-Power Optimization (Identical across all builds)
     // -------------------------------------------------------------------------
+#ifdef CONFIG_B_24MHZ_ABLATION
+    // Ablation: Drop clk_sys to 24 MHz BEFORE deiniting PLL_USB
+    // (SDK uses PLL_USB as intermediate during PLL_SYS reconfiguration)
+    set_sys_clock_khz(24000, true);
+#endif
+
     clock_stop(clk_usb);
     pll_deinit(pll_usb);
     clock_stop(clk_adc);
@@ -111,7 +125,11 @@ int main(void) {
     uint sm = 0;
     uint offset = pio_add_program(pio, &pdm_reader_program);
     pdm_reader_program_init(pio, sm, offset, PIONET_PDM_DATA_PIN, PIONET_PDM_CLK_PIN);
-    pio_sm_set_clkdiv_int_frac(pio, sm, 61, 9);
+#ifdef CONFIG_B_24MHZ_ABLATION
+    pio_sm_set_clkdiv_int_frac(pio, sm, 11, 184);  // 24 MHz / 2.048 MHz = 11 + 184/256
+#else
+    pio_sm_set_clkdiv_int_frac(pio, sm, 61, 9);    // 125 MHz / 2.048 MHz = 61 + 9/256
+#endif
 
     dma_chan = dma_claim_unused_channel(true);
     dma_init_ring();
@@ -128,11 +146,11 @@ int main(void) {
     stage2_classify(dummy_input);
 
     uint32_t read_idx = 0;
-    static int16_t block_pcm[160]; // 10 ms block
+    static int16_t block_pcm[WAKE_SAMPLES];
     static int16_t capture_pcm[STAGE2_TOTAL_SAMPLES]; // 1.0s window
 
     // Arm initial 10 ms alarm
-    hardware_alarm_set_target(timer_alarm_num, delayed_by_us(get_absolute_time(), 10000));
+    hardware_alarm_set_target(timer_alarm_num, delayed_by_us(get_absolute_time(), WAKE_US));
 
     while (1) {
         // Sleep in WFI until 10 ms timer alarm wakes Core 0
@@ -146,9 +164,9 @@ int main(void) {
         uint32_t avail = (cur_w + RING_WORDS - read_idx) & RING_MASK;
 
         // Process newly arrived 10 ms block (160 samples = 320 PDM words)
-        if (avail >= 320) {
+        if (avail >= WAKE_PDM_WORDS) {
             uint32_t block_energy = 0;
-            for (int i = 0; i < 160; i++) {
+            for (int i = 0; i < WAKE_SAMPLES; i++) {
                 uint32_t w0 = pdm_ring[read_idx];
                 uint32_t w1 = pdm_ring[(read_idx + 1) & RING_MASK];
                 read_idx = (read_idx + 2) & RING_MASK;
@@ -164,7 +182,7 @@ int main(void) {
 
                 block_energy += (y < 0) ? (uint32_t)(-y) : (uint32_t)y;
             }
-            uint32_t mean_energy = block_energy / 160;
+            uint32_t mean_energy = block_energy / WAKE_SAMPLES;
 
             // Software VAD Energy Threshold Check
             if (mean_energy > 1100) {
@@ -215,7 +233,7 @@ int main(void) {
         }
 
         // Re-arm hardware timer for next 10 ms wakeup
-        hardware_alarm_set_target(timer_alarm_num, delayed_by_us(get_absolute_time(), 10000));
+        hardware_alarm_set_target(timer_alarm_num, delayed_by_us(get_absolute_time(), WAKE_US));
     }
 
     return 0;

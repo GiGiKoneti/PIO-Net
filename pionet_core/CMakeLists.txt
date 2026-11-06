@@ -4,6 +4,14 @@ cmake_minimum_required(VERSION 3.13)
 # Portable Raspberry Pi Pico SDK Import (Works on Linux, macOS, and Windows)
 # Reads PICO_SDK_PATH from environment variable or cmake cache
 # ------------------------------------------------------------------------------
+if (NOT DEFINED picotool_DIR AND EXISTS "D:/pico/tools/picotool/picotoolConfig.cmake")
+    set(picotool_DIR "D:/pico/tools/picotool" CACHE PATH "Path to picotool config" FORCE)
+endif ()
+if (NOT DEFINED PICOTOOL_FETCH_FROM_GIT_PATH AND EXISTS "D:/pico/tools")
+    set(PICOTOOL_FETCH_FROM_GIT_PATH "D:/pico/tools" CACHE PATH "Path to picotool install dir" FORCE)
+    set(ENV{PICOTOOL_FETCH_FROM_GIT_PATH} "D:/pico/tools")
+endif ()
+
 if (DEFINED ENV{PICO_SDK_PATH} AND (NOT PICO_SDK_PATH))
     set(PICO_SDK_PATH $ENV{PICO_SDK_PATH})
     message("Using PICO_SDK_PATH from environment: '${PICO_SDK_PATH}'")
@@ -46,8 +54,8 @@ pico_generate_pio_header(pionet_core ${CMAKE_CURRENT_LIST_DIR}/pdm_stage1.pio)
 target_sources(pionet_core PRIVATE main.c)
 
 target_include_directories(pionet_core PRIVATE 
-    ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}
 )
 
 target_link_libraries(pionet_core PRIVATE

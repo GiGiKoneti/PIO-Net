@@ -23,6 +23,7 @@
 #include "hardware/irq.h"
 #include "hardware/sync.h"
 #include "hardware/timer.h"
+#include "hardware/structs/timer.h"
 #include "hardware/clocks.h"
 #include "hardware/pll.h"
 #include "hardware/resets.h"
@@ -60,6 +61,10 @@ static volatile uint32_t pio_triggers     = 0;
 
 static volatile uint32_t bench_latency_us = 0;
 static volatile int8_t   bench_pred = 0;
+
+// DVFS clock-settling latency diagnostics (microseconds via timer_hw->timerawl)
+static volatile uint32_t dvfs_upscale_us   = 0;
+static volatile uint32_t dvfs_downscale_us = 0;
 
 static int dma_chan;
 static int timer_alarm_num = -1;
@@ -145,7 +150,7 @@ static void telemetry_core1(void) {
             uint32_t lat_ms_dec = (bench_latency_us % 1000) / 100;
             uint32_t pio1_pc = pio1->sm[0].addr;
 
-            printf("[Telemetry] Density: 0.%03lu | S1: %lu (PC: %lu) | S2: %lu us (~%lu.%lu ms, pred %d) | Overruns: %lu\n",
+            printf("[Telemetry] Density: 0.%03lu | S1: %lu (PC: %lu) | S2: %lu us (~%lu.%lu ms, pred %d) | DVFS up: %lu us, dn: %lu us | Overruns: %lu\n",
                    (unsigned long)density_permille,
                    (unsigned long)pio_triggers,
                    (unsigned long)pio1_pc,
@@ -153,6 +158,8 @@ static void telemetry_core1(void) {
                    (unsigned long)lat_ms_int,
                    (unsigned long)lat_ms_dec,
                    (int)bench_pred,
+                   (unsigned long)dvfs_upscale_us,
+                   (unsigned long)dvfs_downscale_us,
                    (unsigned long)lag_count);
         }
     }
@@ -180,8 +187,10 @@ static void telemetry_core1(void) {
 #define PIO0_DIV_IDLE_FRAC      184
 
 static inline void set_dvfs_burst(void) {
-    set_sys_clock_khz(CLK_BURST_KHZ, true);
+    // Safety: update divider to 61 BEFORE upscaling clk_sys to 125 MHz
+    // Prevents PDM bit clock from ever spiking to 5.33 MHz (exceeding mic's 3.25 MHz limit)
     pio_sm_set_clkdiv_int_frac(pio0, 0, PIO0_DIV_BURST_INT, PIO0_DIV_BURST_FRAC);
+    set_sys_clock_khz(CLK_BURST_KHZ, true);
 }
 
 static inline void set_dvfs_idle(void) {
@@ -239,10 +248,7 @@ static void pio1_isr(void) {
     pio1_hw->irq = 1u; // Clear PIO IRQ 0
     pio_triggers++;
     pio1_triggered = true;
-
-    // Requirement 4: Inside the Core 0 wake IRQ handler, immediately upscale to 125 MHz
-    // via set_sys_clock_khz(125000, true) and update PIO0 clock divider.
-    set_dvfs_burst();
+    // DVFS burst deferred: capture loop runs at 24 MHz, upscale only before Stage-2 compute
 }
 
 static void run_stage2_inference(const int16_t *pcm) {
@@ -444,9 +450,6 @@ int main(void)
             __wfi();
         }
 
-        // Requirement 4: On wake, ensure 125 MHz burst frequency is active
-        set_dvfs_burst();
-
         pio1_triggered = false;
         irq_set_enabled(PIO1_IRQ_0, false); // Mask PIO1 interrupt while CPU is capturing & processing
         gpio_put(PIONET_LED_PIN, 0);
@@ -513,13 +516,24 @@ int main(void)
         irq_set_enabled(TIMER_IRQ_0 + timer_alarm_num, false);
         hardware_alarm_cancel(timer_alarm_num);
 
-        // Requirement 4: Execute Stage-2 inference at 125 MHz
+        // Deferred DVFS: Upscale to 125 MHz only for Stage-2 compute phase
+        {
+            uint32_t t_up0 = timer_hw->timerawl;
+            set_dvfs_burst();
+            dvfs_upscale_us = timer_hw->timerawl - t_up0;
+        }
+
+        // Execute Stage-2 inference at 125 MHz
         run_stage2_inference(pcm);
 
         // Requirement 5: Return to Idle
         // Downscale back to idle frequency (24 MHz), restore PIO0 clock divider,
         // and re-arm the PIO1 hardware trigger.
-        set_dvfs_idle();
+        {
+            uint32_t t_dn0 = timer_hw->timerawl;
+            set_dvfs_idle();
+            dvfs_downscale_us = timer_hw->timerawl - t_dn0;
+        }
 
         gpio_put(PIONET_LED_PIN, 0);
         pio1_hw->irq = 1u; // Clear any pending hardware flag during processing
