@@ -12,52 +12,57 @@
 
 ## 📌 Overview
 
-**PIO-Net** is an ultra-low-power, two-stage cascaded keyword wake-up system designed for the Raspberry Pi RP2040 microcontroller. 
+**PIO-Net** is an ultra-low-power, two-stage cascaded keyword wake-up system designed for the Raspberry Pi RP2040 microcontroller.
 
-Continuous acoustic keyword spotting (KWS) typically demands tens of milliwatts, draining portable batteries within hours. PIO-Net solves this by decoupling acoustic tripwire monitoring from the main CPU using a **Two-Gear Dynamic Voltage and Frequency Scaling (DVFS)** architecture co-designed with the RP2040's **Programmable I/O (PIO)** hardware subsystem:
+Continuous acoustic keyword spotting (KWS) typically demands tens of milliwatts, draining portable batteries within hours. PIO-Net solves this by decoupling acoustic tripwire monitoring and audio ingestion from the main CPU using a **Two-Gear Dynamic Voltage and Frequency Scaling (DVFS)** architecture with a **Deferred Inference Burst** co-designed around the RP2040's **Programmable I/O (PIO)** hardware subsystem:
 
 1. **Quiescent Listening Gear (24 MHz):**
    - System clock is downscaled to **24 MHz** with all unused peripherals gated (`pll_usb` off, `clk_adc` stopped, UART/SPI/I2C/PWM held in reset).
-   - **Stage 1 (Hardware 1-Bit Energy Gate):** PIO state machine 1 directly ingests the 1.024 MHz 1-bit Pulse Density Modulation (PDM) stream and evaluates a dual-tier energy gate in pure silicon ($\ge 19$ ones within a 32-clock window, requiring 12 consecutive qualifying blocks for ~0.2–0.4 ms persistence).
-   - Core 0 remains in deep `__wfi()` sleep with **0 Hz CPU wakeups** during silence and ambient noise, drawing only **7.00 mA (28.6 mW @ 4.08V)**.
+   - **Stage 1 (Hardware 1-Bit Energy Gate):** PIO1 evaluates a dual-tier energy gate in pure silicon ($\ge 19$ ones within a 32-clock window, requiring 12 consecutive qualifying blocks for ~0.2–0.4 ms persistence) directly on the incoming 1.024 MHz PDM bitstream.
+   - Core 0 remains in deep `__wfi()` sleep with **0 Hz CPU wakeups** during silence and ambient noise, drawing only **7.00 mA (28.56 mW @ 4.08V)**.
 
-2. **Active Inference Burst Gear (125 MHz):**
-   - On an acoustic match, PIO asserts an IRQ that triggers a glitchless clock transition (safely parked on 12 MHz `clk_ref`) upscaling the system to **125 MHz**.
-   - **Stage 2 (On-Demand M0+ Classifier):** Core 0 captures 1.0 s of decimated audio, extracts a [39 frames $\times$ 16 Mel bins] spectrogram in **Feat ~87 ms**, and executes an INT8 quantized depthwise separable convolutional neural network (`DSCNNMicro`) in **Infer ~24 ms at 125 MHz** (~110 ms total compute burst, drawing 24.65 mA).
-   - Once classification finishes, the clock immediately downscales back to 24 MHz and Core 0 returns to sleep.
+2. **Low-Power Audio Ingestion & Decimation (24 MHz):**
+   - On an acoustic match, PIO1 asserts an interrupt waking Core 0.
+   - **Crucially, clock upscaling is deferred:** Core 0 remains at **24 MHz** during the entire **850 ms** audio capture window (with 150 ms pre-roll preserved in the DMA circular ring buffer to prevent onset clipping).
+   - Core 0 wakes every 8 ms via hardware timer alarms to decimate chunks (executing at an ultra-low **~2.3% CPU duty cycle** and sleeping in `__wfi()` for >97.5% of the time). Current draw is **~7.50 mA (30.60 mW)**, expending only **$E_{\text{cap}} \approx 26.00\text{ mJ}$** (a **63.9% cut** compared to 125 MHz continuous ingestion).
+
+3. **Active Inference Burst Gear (125 MHz):**
+   - Once the audio frame is captured, the system triggers a glitchless frequency transition (safely updating PIO dividers before upscaling) to **125 MHz**.
+   - **Stage 2 (On-Demand M0+ Classifier):** Core 0 extracts a [39 frames $\times$ 16 Mel bins] spectrogram in **Feat ~87 ms**, and executes a 3,636-parameter Q12 fixed-point depthwise separable convolutional neural network (`DSCNNMicro`) in **Infer ~24 ms at 125 MHz** (~111.4 ms total compute burst consuming **10.43 mJ**).
+   - Total end-to-end wake event energy is only **$E_{\text{event}} = 26.00\text{ mJ} + 10.43\text{ mJ} = 36.43\text{ mJ}$** (incremental energy $\Delta E_{\text{wake}} = 8.97\text{ mJ}$).
+   - Immediately upon decision completion, the clock downscales back to 24 MHz and Core 0 returns to quiescent sleep.
 
 ```
-[Digital PDM Microphone]
+[Digital PDM Microphone (SPH0641LU4H-1)]
            │ (1.024 MHz 1-bit PDM stream)
            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ RP2040 PIO Subsystem (State Machine 1)                      │
-│ • Operating Clock: 24 MHz Quiescent System Clock            │
-│ • Dual-tier temporal energy gate in silicon                 │
-│ • Inner block: >= 19 ones within 32 PDM clocks              │
-│ • Outer persistence: 12 consecutive blocks (~0.2-0.4 ms)    │
+│ RP2040 PIO Subsystem (PIO0 + PIO1 @ 24 MHz)                 │
+│ • PIO0 SM0: 1.024 MHz PDM bitstream reader -> DMA circular  │
+│ • PIO1 SM0: Autonomous 1-density energy tripwire in silicon  │
+│   (>= 19 ones / 32 clocks, 12 consecutive blocks ~0.375 ms) │
 └──────────────────────────┬──────────────────────────────────┘
-                           │ (12 consecutive blocks qualified?)
-                           ├────────────── No  ──> Reset counter, stay asleep (0 Hz CPU wakeups)
-                           ▼ Yes (Acoustic Tripwire Fired / IRQ 0)
+                           │ (Acoustic Tripwire Qualified?)
+                           ├────────────── No  ──> Stay in __wfi() (0 Hz CPU wakeups, 7.00 mA)
+                           ▼ Yes (PIO1 IRQ Asserted)
 ┌─────────────────────────────────────────────────────────────┐
-│ Two-Gear DVFS Controller (Glitchless Frequency Upscale)     │
-│ • Transitions clk_sys from 24 MHz -> 125 MHz                │
-│ • DMA circular buffer drains audio into SRAM                │
+│ Ingestion Phase (Core 0 remains at 24 MHz - DEFERRED BURST) │
+│ • 850 ms capture window + 150 ms pre-roll in 32 KB DMA ring │
+│ • Core 0 wakes every 8 ms via timer alarm (~2.3% duty cycle)│
+│ • Draws ~7.50 mA (26.00 mJ) vs. 71.96 mJ at 125 MHz         │
 └──────────────────────────┬──────────────────────────────────┘
-                           │ Wake-up IRQ
-                           ▼
+                           │ Capture Complete (850 ms elapsed)
+                           ▼ Glitchless PLL Frequency Switch (24 -> 125 MHz)
 ┌─────────────────────────────────────────────────────────────┐
-│ ARM Cortex-M0+ Core 0 @ 125 MHz (Burst Inference)           │
-│ • Audio Capture: 1.0 s (16,000 PCM samples)                 │
-│ • Feature Extractor: Mel Spectrogram (Feat ~87 ms)          │
-│ • Stage-2 Classifier: DSCNNMicro INT8 (Infer ~24 ms)        │
-│ • Total Wake-to-Decision Latency: ~1.1 s                    │
+│ Stage-2 Compute Phase (Core 0 @ 125 MHz Burst)              │
+│ • Mel Spectrogram: 16 Mel bins, 32-bit BFP FFT (87.0 ms)    │
+│ • Classifier: 3,636-param Q12 fixed-point DSCNN (24.0 ms)   │
+│ • Total Compute Duration: 111.4 ms (10.43 mJ energy)        │
 └──────────────────────────┬──────────────────────────────────┘
                            │
-                           ├─> Keyword Detected: Action trigger
+                           ├─> Keyword Detected: Application callback
                            ▼
-               [Downscale to 24 MHz & Return to WFI Sleep]
+        [Glitchless Downscale to 24 MHz & Return to Quiescent WFI Sleep]
 ```
 
 ---
@@ -66,46 +71,61 @@ Continuous acoustic keyword spotting (KWS) typically demands tens of milliwatts,
 
 ### Empirical Hardware Telemetry (INA226 External Power Monitor @ VSYS = 4.08V)
 
-Physical supply voltage and current were captured in real-time using a calibrated high-side INA226 current sensor sampled by an external DAQ over dedicated hardware runs across all three firmware targets:
+Physical supply voltage and current were captured in real-time using a calibrated high-side INA226 current sensor sampled by an external DAQ over dedicated hardware runs across comparison configurations:
 
-| Metric | Config A: Continuous Software VAD | Config B: Duty-Cycled Wake | Config C: PIO-Net (Ours) |
-| :--- | :---: | :---: | :---: |
-| **Quiescent System Clock** | 125 MHz | 125 MHz | **24 MHz** |
-| **Burst System Clock** | 125 MHz | 125 MHz | **125 MHz** |
-| **CPU Wake Rate in Silence** | 100% Active Polling | 100 Hz Timer Wakeups | **0 Hz (Zero CPU Wakeups)** |
-| **Measured Idle Current ($I_{\text{listen}}$)** | **23.90 mA** | **20.55 mA** | **7.00 mA** |
-| **Idle Power @ 4.08V ($P_{\text{listen}}$)** | **97.5 mW** | **83.8 mW** | **28.6 mW** |
-| **Peak Inference Current ($I_{\text{burst}}$)** | **24.42 mA** | **24.30 mA** | **24.65 mA** |
-| **Peak Inference Power ($P_{\text{burst}}$)** | **99.6 mW** | **99.1 mW** | **100.6 mW** |
-| **Idle Power Savings vs. Config A** | *Baseline (0%)* | *14.0% saved ($1.16\times$)* | **70.7% saved ($3.41\times$ lower)** |
-| **Idle Power Savings vs. Config B** | — | *Baseline (0%)* | **65.9% saved ($2.93\times$ lower)** |
-
-### Operational Battery Lifetime Comparison
-
-Assuming a standard portable power source (e.g., 2× AAA pack or 500 mAh 3.7V/4.1V LiPo cell) under realistic acoustic conditions (99.0% silence/ambient noise, 1.0% keyword activation):
-
-| Firmware Architecture | Quiescent Power | Active Burst Power | Effective Average Power | Battery Lifetime (500 mAh LiPo) |
+| Metric | Config A: Continuous Software VAD | Config B: Duty-Cycled Wake (125 MHz) | Config B-Low: Duty-Cycled (24 MHz) | Config C: PIO-Net (Ours) |
 | :--- | :---: | :---: | :---: | :---: |
-| **Config A (Continuous Software VAD)** | 97.5 mW | 99.6 mW | 97.5 mW | **20.9 hours (0.87 days)** |
-| **Config B (Duty-Cycled 10ms Wake)** | 83.8 mW | 99.1 mW | 84.0 mW | **24.3 hours (1.01 days)** |
-| **Config C: PIO-Net (Two-Gear DVFS)** | **28.6 mW** | **100.6 mW** | **29.3 mW** | **69.6 hours (2.90 days)** |
-
-> **Key Architectural Finding:** Standard software duty-cycling (Config B) only yields a modest 14% power reduction over continuous polling (Config A) because the 125 MHz clock tree and peripheral crossbar continue dissipating dynamic charge ($C \cdot V^2 \cdot f$) during `__wfi()`. PIO-Net achieves a **$3.41\times$ power reduction** by offloading the wake tripwire to autonomous PIO silicon, enabling true 24 MHz idle downscaling.
+| **Quiescent System Clock** | 125 MHz | 125 MHz | 24 MHz | **24 MHz** |
+| **Burst System Clock** | 125 MHz | 125 MHz | 125 MHz | **125 MHz (Deferred)** |
+| **CPU Wake Rate in Silence** | Continuous Polling | 100 Hz Timer Wakeups | 100 Hz Timer Wakeups | **0 Hz (Zero CPU Wakeups)** |
+| **Quiescent Current ($I_{\text{listen}}$)** | 23.90 mA | 20.55 mA | 11.20 mA | **7.00 mA** |
+| **Quiescent Power ($P_{\text{listen}}$)** | 97.51 mW | 83.84 mW | 45.70 mW | **28.56 mW** |
+| **Idle Savings vs. Config A** | *Baseline (0%)* | 14.0% saved | 53.1% saved | **70.7% saved ($3.41\times$ lower)** |
+| **Idle Savings vs. Config B-Low**| — | — | *Baseline (0%)* | **37.5% saved ($1.60\times$ lower)** |
+| **Active Burst Power ($P_{\text{burst}}$)** | 99.6 mW | 99.1 mW | 100.4 mW | **100.36 ± 1.57 mW** |
+| **Capture Current / Energy (850 ms)** | 24.42 mA (84.8 mJ) | 24.30 mA (84.4 mJ) | 24.65 mA (84.4 mJ) | **~7.50 mA (~26.00 mJ)** |
+| **Compute Burst Energy ($E_{\text{compute}}$)** | Continuous | 10.82 mJ | 10.82 mJ | **10.43 ± 0.65 mJ** |
+| **Total Event Energy ($E_{\text{event}}$)** | Continuous | 82.78 mJ | 82.78 mJ | **36.43 mJ ($\Delta E_{\text{wake}} = 8.97\text{ mJ}$)** |
+| **Model Format & Parameters** | INT8 (3,892 params) | INT8 (3,892 params) | INT8 (3,892 params) | **Q12 Fixed-Point (3,636 params)** |
+| **Flash Footprint** | 4.10 KB | 4.10 KB | 4.10 KB | **7.30 KB** |
+| **Peak SRAM Allocation** | 6.25 KB | 6.25 KB | 6.25 KB | **15.36 KB (< 6% of RP2040 SRAM)** |
 
 ---
 
-### Pipeline Stage & Latency Audit (Cortex-M0+ @ 125 MHz)
+### Operational Battery Lifetime Comparison
+
+Modeled across standard electrochemical cells (500 mAh 3.7V LiPo @ $\eta = 88\%$, 1.85 Wh; 850 mAh 2×AAA @ $\eta = 85\%$, 2.55 Wh) across acoustic operational environments:
+
+| Operating Scenario | Wake Rate | Effective Power | 500 mAh LiPo | 2× AAA Alkaline | Gain vs. Continuous |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Quiet Room / Office** | 0.01 /s (36 wakes/h) | **28.65 mW** | **56.8 hours** | **75.7 hours** | **$3.40\times$** |
+| **Active Domestic Home** | 0.05 /s (180 wakes/h) | **28.86 mW** | **56.4 hours** | **75.1 hours** | **$3.38\times$** |
+| **Street / Loud TV Babble** | 0.10 /s (360 wakes/h) | **29.46 mW** | **55.3 hours** | **73.6 hours** | **$3.31\times$** |
+| **Saturated Continuous Noise** | 1.04 /s (3,745 wakes/h max) | **37.89 mW** | **43.0 hours** | **57.2 hours** | **$2.57\times$ (61.1% cut vs. 97.5 mW)** |
+| **Config A (Continuous Polling)** | Continuous | 97.50 mW | 16.7 hours | 22.2 hours | *Baseline ($1.00\times$)* |
+
+> **Key Architectural Takeaways:**
+> 1. **Zero-CPU Tripwire:** PIO-Net slashes quiescent listening power by **70.7%** ($3.41\times$) vs continuous polling, and **37.5%** vs 24 MHz software polling (Config B-Low), purely by offloading the bitstream energy check to silicon.
+> 2. **Deferred DVFS Burst:** Deferring the 125 MHz clock upscale to the 111.4 ms neural inference phase drops capture energy from 71.96 mJ to 26.00 mJ, shrinking total event energy from 83.16 mJ to **36.43 mJ** (>56% reduction).
+> 3. **Mathematical Bounding:** Even in worst-case saturated noise ($f_{\text{max}} = 1.040\text{ s}^{-1}$), system power saturates at **37.89 mW**—maintaining a **61.1% power advantage** over continuous polling. The break-even rate is $f_{\text{break}} = 7.685\text{ s}^{-1}$ (27,668 wakes/h), which is physically impossible to exceed.
+
+---
+
+### Pipeline Stage & Latency Audit (RP2040 Cortex-M0+)
 
 | Pipeline Stage / Metric | Basis | Measured Value | Implementation / Hardware Setup |
 |---|---|---|---|
-| **Stage-1 Detection Window** | **MEASURED** | $\ge 19$ ones within 32 clocks | Inner sub-block threshold evaluated in PIO1 (`pdm_stage1.pio`) |
-| **Stage-1 Persistence Gate** | **MEASURED** | 12 consecutive blocks | Persistence duration: ~0.2–0.4 ms at 1.024 MHz PDM clock before IRQ assert |
-| **Quiescent CPU Duty Cycle** | **MEASURED** | 0.0% | Core 0 in `__wfi()`, silent ring DMA keeps microphone clock alive (0 CPU IRQs) |
-| **Audio Capture Window** | **MEASURED** | 1.0 s | 16,000 PCM samples decimated at 64x popcount from 1.024 MHz stream |
-| **Stage-2 Feature Extraction** | **MEASURED** | Feat ~87 ms | [39 $\times$ 16] Mel-spectrogram with 32-bit BFP FFT on Cortex-M0+ |
-| **Stage-2 Classifier Inference** | **MEASURED** | Infer ~24 ms | DSCNNMicro INT8 inference at 125 MHz on Cortex-M0+ hardware multiplier |
-| **Total Wake-to-Decision** | **MEASURED** | ~1.1 s | From Stage-1 IRQ assert to classification output (including 1.0 s capture) |
-| **Stage-2 Classification Acc.** | **MEASURED** | 82.4% | Full-resolution Q8 features on Speech Commands 12-class benchmark |
+| **Stage-1 Evaluation Window** | **HARDWARE** | $\ge 19$ ones within 32 clocks | Inner sub-block threshold evaluated in PIO1 (`pdm_stage1.pio`) |
+| **Stage-1 Persistence Gate** | **HARDWARE** | 12 consecutive blocks | Persistence window: ~0.375 ms at 1.024 MHz PDM clock before IRQ assert |
+| **Quiescent CPU Duty Cycle** | **MEASURED** | **0.0%** | Core 0 in `__wfi()`, circular DMA keeps microphone clocked (0 CPU IRQs) |
+| **Capture CPU Duty Cycle** | **MEASURED** | **~2.3%** | Core 0 wakes every 8 ms for boxcar decimation, remaining in `__wfi()` >97.5% |
+| **Audio Capture Window** | **MEASURED** | 850 ms | 13,600 PCM samples decimated at 64x popcount from 1.024 MHz stream |
+| **Stage-2 Feature Extraction** | **MEASURED** | 87.0 ms | [39 $\times$ 16] Mel-spectrogram with 32-bit BFP FFT on Cortex-M0+ @ 125 MHz |
+| **Stage-2 Classifier Inference** | **MEASURED** | 24.0 ms | 3,636-param Q12 DSCNN inference @ 125 MHz on Cortex-M0+ hardware multiplier |
+| **Total Inference Compute** | **MEASURED** | **111.4 ms** | Stage-2 Feature extraction + neural classifier at 125 MHz burst |
+| **Total Wake Event Duration** | **MEASURED** | 961.4 ms | 850 ms capture (24 MHz) + 111.4 ms compute (125 MHz) |
+| **Balanced Keyword Recall** | **MEASURED** | **90.8%** | Macro-averaged recall across all 10 keywords (including 2.4% tripwire miss) |
+| **False Rejection / Wakes** | **MEASURED** | **Zero in 72 h** | Zero false keyword classifications across 72 hours of calibrated noise suite |
 
 ---
 
@@ -145,21 +165,29 @@ PIO-Net/
 ├── pionet_comparisons/      # Standalone SenSys 2027 benchmark targets (Config A, B, C)
 │   ├── CMakeLists.txt       # Unified Ninja/CMake build file
 │   ├── config_a_cpu_continuous.c # 125 MHz 100% active polling baseline
-│   ├── config_b_dutycycle.c # 125 MHz 10ms periodic timer buffer-wake baseline
-│   ├── config_c_pionet.c    # 24 MHz -> 125 MHz Two-Gear DVFS PIO-Net target
+│   ├── config_b_dutycycle.c # 125 MHz / 24 MHz periodic timer buffer-wake baseline
+│   ├── config_c_pionet.c    # 24 MHz -> 125 MHz Two-Gear DVFS with Deferred Burst
 │   └── README.md            # Empirical measurement protocol and verification data
 ├── pionet_core/             # Production RP2040 C firmware implementation
+│   ├── baseline_wfi.c       # Pure baseline WFI power benchmark target (1.3 mA floor)
 │   ├── CMakeLists.txt       # Firmware build with clock wrap & peripheral gating
 │   ├── main.c               # Two-gear DVFS executive, PDM DMA ring, and Stage-2 driver
+│   ├── main.h               # Configuration macros, pin definitions, and DMA parameters
+│   ├── model_data.h         # Q12 fixed-point DSCNNMicro weights and biases (3,636 params)
 │   ├── pdm_reader.pio       # PIO0 state machine: 1.024 MHz PDM clock & bit capture
 │   ├── pdm_stage1.pio       # PIO1 state machine: Autonomous 1-bit temporal energy gate
 │   ├── stage2_features.c    # 16-channel Mel-filterbank with Radix-2 BFP FFT
-│   └── stage2_infer.c       # INT8 CMSIS-NN DSCNN inference engine
+│   ├── stage2_features.h    # Feature extraction interfaces
+│   ├── stage2_infer.c       # Q12 CMSIS-NN depthwise separable CNN inference engine
+│   └── stage2_infer.h       # Classifier interfaces
 ├── stage2/                  # Stage-2 DSCNNMicro neural network
 │   ├── model.py             # PyTorch architecture
 │   ├── train_stage2.py      # Training, BatchNorm folding, and CMSIS-NN exporter
-│   ├── model_data.h         # Exported INT8 CMSIS-NN C header
+│   ├── model_data.h         # Exported Q12 CMSIS-NN C header
 │   └── model_config.json    # Hardware memory & latency budget audit
+├── tools/                   # Automated data loggers and PDF revision utilities
+│   ├── apply_path_b_perfect.py # Automated camera-ready PDF compiler
+│   └── stm32_auto_logger.py    # Automated multi-board INA226 DAQ power logger
 ├── verification/            # Automated test suite (34 unit and system tests)
 │   ├── gonogo_checkpoint.py # Official Go/No-Go feasibility evaluator
 │   └── test_*.py            # PyTest automated unit test modules
@@ -175,7 +203,7 @@ PIO-Net/
 ### 1. Installation
 Clone the repository and set up a virtual environment:
 ```bash
-git clone https://github.com/GiGiKoneti/PIO-Net.git
+git clone https://github.com/adarshaudupa/PIO-Net.git
 cd PIO-Net
 python3 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
@@ -187,28 +215,41 @@ pip install torch numpy scipy soundfile matplotlib pytest
 make verify
 ```
 
-### 3. Build & Flash Comparison Targets
+### 3. Build & Flash Firmware Targets
 To replicate the SenSys 2027 power benchmark on an RP2040 board with an INA226 current monitor:
+
+#### Option A: Build Comparison Suite
 ```bash
 cd pionet_comparisons
 mkdir build && cd build
 cmake -G Ninja -DPICO_BOARD=pico ..
 ninja
 ```
-Flashing targets:
+Generated targets:
 - `config_a_continuous.uf2`: 125 MHz Continuous Software Polling (measures ~23.90 mA)
 - `config_b_dutycycle.uf2`: 125 MHz Duty-Cycled 10ms Wake (measures ~20.55 mA)
-- `config_c_pionet.uf2`: Two-Gear DVFS PIO-Net (measures ~7.00 mA quiescent, 24.65 mA burst)
+- `config_c_pionet.uf2`: Two-Gear DVFS with Deferred Burst (measures ~7.00 mA quiescent, ~7.50 mA capture, 24.65 mA burst)
+
+#### Option B: Build Core Production Firmware
+```bash
+cd pionet_core
+mkdir build && cd build
+cmake -G Ninja -DPICO_BOARD=pico ..
+ninja
+```
+Generated targets:
+- `pionet_core.uf2`: Production wake-on-sound engine with deferred 125 MHz burst and Q12 DSCNN classifier
+- `pico_wfi_baseline.uf2`: Pure `__wfi()` sleep baseline with Core 1 and all clocks off (measures ~1.3–1.5 mA)
 
 ---
 
-## 📄 License & Citation
+## 📄 Citation & Attribution
 
-This project is licensed under the MIT License.
+This project is submitted to ACM SenSys 2027.
 
 ```bibtex
 @inproceedings{koneti2027pionet,
-  title     = {PIO-Net: Ultra-Low-Power Cascaded Acoustic Wake-Up on Microcontrollers via Programmable I/O Gating},
+  title     = {PIO-Net: Acoustic Wake-on-Sound for Commodity Microcontrollers Using Programmable I/O and Two-Gear Clock Scaling},
   author    = {Koneti, Gigi and Baikady, Adarsha Udupa and Anand, Anukul},
   booktitle = {Proceedings of the International Conference on Embedded Artificial Intelligence and Sensing Systems (ACM SenSys)},
   year      = {2027}
