@@ -21,6 +21,7 @@ data/
 *.tar.gz
 *.wav
 *.pdm
+*.bin
 
 # Scratch & Temporary Notes
 scratch/
@@ -33,8 +34,12 @@ subweb.txt
 Thumbs.db
 .vscode/
 .idea/
+.clangd
+compile_commands.json
 
 # RP2040 & CMake Build Artifacts
 build/
 cmake-build-*/
 *.pio.h
+*.uf2
+*.elf

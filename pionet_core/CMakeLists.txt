@@ -4,6 +4,14 @@ cmake_minimum_required(VERSION 3.13)
 # Portable Raspberry Pi Pico SDK Import (Works on Linux, macOS, and Windows)
 # Reads PICO_SDK_PATH from environment variable or cmake cache
 # ------------------------------------------------------------------------------
+if (NOT DEFINED picotool_DIR AND EXISTS "D:/pico/tools/picotool/picotoolConfig.cmake")
+    set(picotool_DIR "D:/pico/tools/picotool" CACHE PATH "Path to picotool config" FORCE)
+endif ()
+if (NOT DEFINED PICOTOOL_FETCH_FROM_GIT_PATH AND EXISTS "D:/pico/tools")
+    set(PICOTOOL_FETCH_FROM_GIT_PATH "D:/pico/tools" CACHE PATH "Path to picotool install dir" FORCE)
+    set(ENV{PICOTOOL_FETCH_FROM_GIT_PATH} "D:/pico/tools")
+endif ()
+
 if (DEFINED ENV{PICO_SDK_PATH} AND (NOT PICO_SDK_PATH))
     set(PICO_SDK_PATH $ENV{PICO_SDK_PATH})
     message("Using PICO_SDK_PATH from environment: '${PICO_SDK_PATH}'")
@@ -28,26 +36,58 @@ set(CMAKE_CXX_STANDARD 17)
 # Initialize Raspberry Pi Pico SDK
 if (COMMAND pico_sdk_init)
     pico_sdk_init()
+    add_compile_options(-O3)
 endif ()
 
-add_executable(pionet_core)
+add_executable(pionet_core
+        model_data.h
+        stage2_infer.h
+        stage2_infer.c
+        stage2_features.h
+        stage2_features.c)
 
 # Generate C header from PIO assembly
 pico_generate_pio_header(pionet_core ${CMAKE_CURRENT_LIST_DIR}/pdm_reader.pio)
+pico_generate_pio_header(pionet_core ${CMAKE_CURRENT_LIST_DIR}/pdm_stage1.pio)
+
 
 target_sources(pionet_core PRIVATE main.c)
 
 target_include_directories(pionet_core PRIVATE 
-    ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}
 )
 
 target_link_libraries(pionet_core PRIVATE
+    -Wl,--wrap=set_sys_clock_pll
     pico_stdlib
     hardware_pio
     hardware_gpio
+    hardware_dma
+    hardware_clocks
+    hardware_pll
+    hardware_resets
+    pico_multicore
 )
 
+option(PIONET_ENABLE_STDIO_USB "Enable USB stdio output" OFF)
+option(PIONET_VARIANT2_POWER "Build variant2 with USB stdio, telemetry, and status LED disabled for power measurements" ON)
+
+if (PIONET_VARIANT2_POWER)
+    set(PIONET_ENABLE_STDIO_USB OFF)
+    target_compile_definitions(pionet_core PRIVATE PIONET_TELEMETRY=0 PIONET_STATUS_LED=0)
+endif ()
+
 pico_add_extra_outputs(pionet_core)
-pico_enable_stdio_usb(pionet_core 1)
+pico_enable_stdio_usb(pionet_core 0)
 pico_enable_stdio_uart(pionet_core 0)
+
+# ------------------------------------------------------------------------------
+# Pure Baseline WFI Target (Core 1 reset, Core 0 in wfi, no USB CDC, no telemetry)
+# Generates pico_wfi_baseline.uf2 for measuring the ~1.3 mA - 1.5 mA chip baseline
+# ------------------------------------------------------------------------------
+add_executable(pico_wfi_baseline baseline_wfi.c)
+target_link_libraries(pico_wfi_baseline PRIVATE pico_stdlib hardware_clocks hardware_pll hardware_gpio)
+pico_add_extra_outputs(pico_wfi_baseline)
+pico_enable_stdio_usb(pico_wfi_baseline 0)
+pico_enable_stdio_uart(pico_wfi_baseline 0)
